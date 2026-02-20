@@ -1,0 +1,38 @@
+[project]
+name = "llm-eval-studio"
+version = "0.1.0"
+description = "A lightweight evaluation engine for LLM applications"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.83.0",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.15.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::pytest.PytestCollectionWarning"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.coverage.run]
+source = ["eval_runner"]
+
+[tool.coverage.report]
+fail_under = 90

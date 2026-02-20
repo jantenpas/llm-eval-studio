@@ -1,0 +1,20 @@
+[
+  {
+    "input": "What is the capital of France?",
+    "expected_output": "Paris",
+    "scoring_method": "exact_match",
+    "tags": ["geography", "factual"]
+  },
+  {
+    "input": "Explain what a REST API is in one sentence.",
+    "expected_output": "A REST API is a web service interface that uses HTTP methods to perform CRUD operations on resources, typically returning data in JSON format.",
+    "scoring_method": "llm_judge",
+    "tags": ["technical", "explanation"]
+  },
+  {
+    "input": "Write a haiku about programming.",
+    "expected_output": "A haiku about programming that follows the 5-7-5 syllable structure and relates to coding or software development.",
+    "scoring_method": "llm_judge",
+    "tags": ["creative"]
+  }
+]

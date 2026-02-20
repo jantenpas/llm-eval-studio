@@ -1,0 +1,11 @@
+.env
+.env.*
+__pycache__/
+*.pyc
+.DS_Store
+eval_runner/results/
+.vscode/
+.venv/
+venv/
+.uv/
+.coverage
