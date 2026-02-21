@@ -9,3 +9,4 @@ eval_runner/results/
 venv/
 .uv/
 .coverage
+*.db
