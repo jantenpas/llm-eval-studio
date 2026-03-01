@@ -45,3 +45,7 @@ class RunDetailResponse(BaseModel):
     status: str
     created_at: str
     results: list[ResultResponse]
+    total: int
+    passed: int
+    avg_score: float | None
+    avg_latency_ms: float | None

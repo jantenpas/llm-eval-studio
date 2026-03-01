@@ -307,3 +307,53 @@ class TestGetRunById:
         assert data["status"] == RunStatus.completed
         assert len(data["results"]) == 1
         assert data["results"][0]["score"] == 1.0
+
+    async def test_run_detail_aggregates_with_results(
+        self, client: AsyncClient, db: aiosqlite.Connection
+    ) -> None:
+        with patch("api.routes._run_eval_background"):
+            post = await client.post("/runs", json=SAMPLE_REQUEST)
+        run_id = post.json()["id"]
+
+        await db.execute(
+            """INSERT INTO results
+               (id, run_id, test_case_input, test_case_expected,
+                actual_output, score, reasoning, latency_ms, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(uuid4()), run_id, "Q1?", "A1", "A1",
+             1.0, "Exact match.", 1000, datetime.now(UTC).isoformat()),
+        )
+        await db.execute(
+            """INSERT INTO results
+               (id, run_id, test_case_input, test_case_expected,
+                actual_output, score, reasoning, latency_ms, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(uuid4()), run_id, "Q2?", "A2", "wrong",
+             0.0, "No match.", 500, datetime.now(UTC).isoformat()),
+        )
+        await db.execute(
+            "UPDATE runs SET status = ? WHERE id = ?",
+            (RunStatus.completed, run_id),
+        )
+        await db.commit()
+
+        response = await client.get(f"/runs/{run_id}")
+        data = response.json()
+        assert data["total"] == 2
+        assert data["passed"] == 1
+        assert data["avg_score"] == 0.5
+        assert data["avg_latency_ms"] == 750.0
+
+    async def test_run_detail_aggregates_empty_results(
+        self, client: AsyncClient
+    ) -> None:
+        with patch("api.routes._run_eval_background"):
+            post = await client.post("/runs", json=SAMPLE_REQUEST)
+        run_id = post.json()["id"]
+
+        response = await client.get(f"/runs/{run_id}")
+        data = response.json()
+        assert data["total"] == 0
+        assert data["passed"] == 0
+        assert data["avg_score"] is None
+        assert data["avg_latency_ms"] is None

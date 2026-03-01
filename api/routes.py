@@ -25,7 +25,7 @@ from api.schemas import (
     RunSummaryResponse,
 )
 from eval_runner.models import RunStatus
-from eval_runner.runner import MODEL, run_eval
+from eval_runner.runner import MODEL, PASS_THRESHOLD, run_eval
 
 router = APIRouter()
 
@@ -111,6 +111,11 @@ async def get_run(run_id: str, db: Db) -> RunDetailResponse:
 
     result_rows = await fetch_results_for_run(db, run_id)
 
+    total = len(result_rows)
+    passed = sum(1 for r in result_rows if r["score"] >= PASS_THRESHOLD)
+    avg_score = sum(r["score"] for r in result_rows) / total if total else None
+    avg_latency_ms = sum(r["latency_ms"] for r in result_rows) / total if total else None
+
     return RunDetailResponse(
         id=run["id"],
         name=run["name"],
@@ -129,4 +134,8 @@ async def get_run(run_id: str, db: Db) -> RunDetailResponse:
             )
             for r in result_rows
         ],
+        total=total,
+        passed=passed,
+        avg_score=avg_score,
+        avg_latency_ms=avg_latency_ms,
     )
