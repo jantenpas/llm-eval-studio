@@ -22,9 +22,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit"]
 filterwarnings = ["ignore::pytest.PytestCollectionWarning"]
 asyncio_mode = "auto"
+markers = ["e2e: end-to-end tests that require a live server and ANTHROPIC_API_KEY"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -200,7 +200,7 @@ class TestRunTestCase:
             scoring_method=ScoringMethod.fuzzy,
         )
         with patch("eval_runner.runner.call_claude", return_value=("x", 100)):
-            with pytest.raises(NotImplementedError):
+            with pytest.raises((NotImplementedError, ValueError)):
                 run_test_case(tc, run)
 
 

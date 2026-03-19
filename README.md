@@ -1,6 +1,6 @@
 # LLM Eval Studio
 
-A lightweight evaluation engine for LLM applications. Write test cases in JSON, run them against Claude, and get scored results with pass/fail reasoning — so you can iterate on prompts with confidence.
+A lightweight evaluation engine for LLM applications. Organise test cases into projects and suites, run them against Claude, and get scored results with pass/fail reasoning — so you can iterate on prompts with confidence and catch regressions before they ship.
 
 ---
 
@@ -24,125 +24,149 @@ cp .env.example .env
 
 ---
 
-## Usage
-
-### REST API
-
-Start the API server:
+## Starting the Server
 
 ```bash
 uv run fastapi dev api/main.py
 ```
 
-Then open `http://localhost:8000/docs` for the interactive Swagger UI, or use the endpoints directly:
+Open `http://localhost:8000/docs` for the interactive Swagger UI.
 
-**Trigger an eval run:**
+The database is created automatically on first startup. To start fresh:
 
 ```bash
+rm eval_studio.db && uv run fastapi dev api/main.py
+```
+
+---
+
+## Core Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **Project** | Top-level container. Groups suites and tracks run history. |
+| **Test Suite** | A named collection of test cases belonging to a project. |
+| **Test Case** | A single input / expected output pair with a scoring method. |
+| **Run** | Executes a suite against Claude with a given system prompt. Runs execute in the background and persist results to SQLite. |
+
+---
+
+## REST API
+
+A full walkthrough is in [tests/ManualTesting.md](tests/ManualTesting.md). Quick reference:
+
+### Projects
+
+```bash
+POST   /projects                      # create
+GET    /projects                      # list (includes latest run score + status)
+GET    /projects/{id}                 # detail (includes suites and recent runs)
+DELETE /projects/{id}                 # delete (blocked if a run is in progress)
+```
+
+### Test Suites
+
+```bash
+POST   /projects/{project_id}/suites  # create
+GET    /projects/{project_id}/suites  # list
+DELETE /suites/{id}                   # delete (blocked if suite has been run)
+GET    /suites/{id}/export            # download suite as JSON
+POST   /suites/{id}/import            # bulk import test cases from JSON
+```
+
+### Test Cases
+
+```bash
+POST   /suites/{suite_id}/test-cases  # create
+GET    /suites/{suite_id}/test-cases  # list
+PUT    /test-cases/{id}               # update
+DELETE /test-cases/{id}               # delete
+```
+
+### Runs
+
+```bash
+POST   /runs                          # create + trigger (executes in background)
+GET    /projects/{project_id}/runs    # list runs for a project
+GET    /runs/{id}                     # detail + results
+DELETE /runs/{id}                     # delete
+GET    /runs/{id}/gate                # quality gate — pass/fail against threshold
+GET    /runs/{id}/compare/{other_id}  # diff two runs test-case by test-case
+```
+
+### Example: fire a run
+
+```bash
+# 1. Create a project
+curl -X POST http://localhost:8000/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Assistant", "description": "Prompt iteration"}'
+
+# 2. Create a suite and add test cases (see RunManualTest.md for full flow)
+
+# 3. Fire a run
 curl -X POST http://localhost:8000/runs \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "my-run",
-    "test_cases": [
-      {
-        "input": "What is 2+2? Reply with only the number.",
-        "expected_output": "4",
-        "scoring_method": "exact_match"
-      }
-    ]
+    "name": "Prompt v1",
+    "project_id": "<project_id>",
+    "suite_id": "<suite_id>",
+    "system_prompt": "Answer as concisely as possible.",
+    "pass_threshold": 0.80
   }'
-# → {"id": "...", "name": "my-run", "status": "running"}
+
+# 4. Poll until complete
+curl http://localhost:8000/runs/<run_id>
+
+# 5. Check the quality gate
+curl http://localhost:8000/runs/<run_id>/gate
 ```
-
-The run executes in the background. Poll for results:
-
-```bash
-curl http://localhost:8000/runs/{id}
-```
-
-List all past runs:
-
-```bash
-curl http://localhost:8000/runs
-```
-
-Results are persisted to a local SQLite database (`eval_studio.db`).
 
 ---
 
-### Python API
+## Scoring Methods
 
-Run an eval directly from Python:
+| Method | How it works |
+|--------|-------------|
+| `exact_match` | Case-insensitive string comparison, strips whitespace. Score is 1.0 or 0.0. |
+| `llm_judge` | Claude scores the response 0.0–1.0 against `expected_output`, with reasoning. Supports a `scoring_config` rubric (custom criteria list) instead of `expected_output`. |
 
-```python
-from pathlib import Path
-from eval_runner.runner import run_eval
-
-run_eval(
-    test_cases_path=Path("eval_runner/test_cases/my_suite.json"),
-    run_name="my-prompt-v2",
-    system_prompt="You are a helpful assistant that answers concisely.",
-)
-```
-
-**Write your own test cases** in `eval_runner/test_cases/` as a JSON array:
+### `scoring_config` rubric example
 
 ```json
-[
-  {
-    "input": "What is the capital of France?",
-    "expected_output": "Paris",
-    "scoring_method": "exact_match",
-    "tags": ["geography"]
-  },
-  {
-    "input": "Explain what a REST API is in one sentence.",
-    "expected_output": "A REST API uses HTTP methods to perform operations on resources, returning structured data.",
-    "scoring_method": "llm_judge",
-    "tags": ["technical"]
+{
+  "input": "Explain what a database index is.",
+  "expected_output": "placeholder",
+  "scoring_method": "llm_judge",
+  "scoring_config": {
+    "criteria": [
+      "Mentions that an index speeds up queries",
+      "Mentions the trade-off with write speed or storage",
+      "Uses an analogy or concrete example"
+    ]
   }
-]
-```
-
-Supported scoring methods:
-- `exact_match` — case-insensitive string comparison, strips whitespace
-- `llm_judge` — uses Claude to score the response against the expected output (0.0–1.0)
-
-**Example output:**
-
-```
-Starting run: 'sample-run-v1'  (3 test cases)
-  [1/3] What is the capital of France?...
-  [2/3] Explain what a REST API is in one sentence....
-  [3/3] Write a haiku about programming....
-
-=======================================================
-  EVAL RESULTS — 2026-02-19 18:22:52 UTC
-=======================================================
-
-✗ FAIL  [0.00]  What is the capital of France?...
-         Expected 'Paris', got 'The capital of France is **Paris**.'
-
-✓ PASS  [0.80]  Explain what a REST API is in one sentence....
-         Captures core REST concepts but omits JSON as the return format.
-
-✓ PASS  [1.00]  Write a haiku about programming....
-         Follows 5-7-5 structure and relates clearly to software development.
-
--------------------------------------------------------
-  Passed:      2/3
-  Avg Score:   0.60
-  Avg Latency: 1319ms
-=======================================================
+}
 ```
 
 ---
 
-### Run the test suite
+## Testing
+
+### Unit tests (no server required)
 
 ```bash
 uv run pytest
+uv run pytest --cov --cov-report=term-missing
 ```
+
+### E2E tests (requires live server + `ANTHROPIC_API_KEY`)
+
+```bash
+uv run fastapi dev api/main.py   # in a separate terminal
+uv run pytest tests/e2e/ -v
+```
+
+See [tests/e2e/README.md](tests/e2e/README.md) for details.
 
 ---
 
@@ -151,20 +175,27 @@ uv run pytest
 ```
 llm-eval-studio/
   api/
-    main.py          # FastAPI app and lifespan
-    routes.py        # POST /runs, GET /runs, GET /runs/{id}
-    database.py      # SQLite setup and query functions
-    schemas.py       # Pydantic request/response models
+    main.py            # FastAPI app and lifespan
+    routes.py          # All route handlers
+    database.py        # SQLite connection, migrations, query functions
+    schemas.py         # Pydantic request/response models
   eval_runner/
-    models.py        # Pydantic models: Project, TestCase, Run, Result
-    runner.py        # Eval engine: load → run → score → report
-    test_cases/      # JSON test suite files
-    results/         # Timestamped JSON output (gitignored)
+    models.py          # Core data models
+    runner.py          # Eval engine: call Claude → score → persist
+    scorers.py         # Scorer protocol — ExactMatchScorer, LLMJudgeScorer
+  migrations/
+    001_initial_schema.sql   # DB schema (applied automatically on startup)
   tests/
-    test_api.py      # API endpoint and database tests
-    test_models.py   # Unit tests for data models
-    test_graders.py  # Unit tests for scoring functions
-    test_runner.py   # Unit tests for the eval engine
+    unit/              # Fast tests, no server required (TestClient + in-memory DB)
+      test_api.py
+      test_graders.py
+      test_models.py
+      test_runner.py
+    e2e/               # End-to-end tests against a live server
+      test_exact_match.py
+      test_llm_judge.py
+      test_run_comparison.py
+      test_error_paths.py
 ```
 
 ---
@@ -178,7 +209,10 @@ Changing a prompt and thinking it got better is not the same as knowing it got b
 ## Roadmap
 
 - [x] Core eval engine — load, run, score, report
-- [x] FastAPI backend — REST endpoints for triggering and retrieving eval runs
+- [x] FastAPI backend — projects, suites, test cases, runs, quality gate, run comparison
+- [x] SQLite persistence with migration system
+- [x] `llm_judge` scoring with custom rubric support
+- [x] E2E regression test suite
 - [ ] Next.js UI — test case editor, results dashboard, run comparison view
 - [ ] Fuzzy match scoring
 - [ ] Multi-model support (compare Claude versions side-by-side)

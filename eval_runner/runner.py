@@ -1,5 +1,5 @@
+import asyncio
 import json
-import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +9,8 @@ import anthropic
 from anthropic.types import TextBlock
 from dotenv import load_dotenv
 
-from eval_runner.models import Result, Run, RunStatus, ScoringMethod, TestCase
+from eval_runner.models import Result, Run, RunStatus, TestCase
+from eval_runner.scorers import get_scorer
 
 MODEL = "claude-sonnet-4-6"
 PASS_THRESHOLD = 0.7
@@ -63,66 +64,55 @@ def call_claude(prompt: str, system_prompt: str = "", max_tokens: int = 1024) ->
     return block.text, latency_ms
 
 
-def grade_exact_match(actual: str, expected: str) -> tuple[float, str]:
-    match = actual.strip().lower() == expected.strip().lower()
-    score = 1.0 if match else 0.0
-    reasoning = "Exact match." if match else f"Expected '{expected}', got '{actual}'."
-    return score, reasoning
-
-
-def grade_with_llm(actual: str, expected: str) -> tuple[float, str]:
-    prompt = f"""You are evaluating an AI assistant's response against an expected output.
-
-<expected>{expected}</expected>
-<actual>{actual}</actual>
-
-Score how well the actual response satisfies the intent of the expected output.
-- 1.0 = correct and complete
-- 0.5 = partially correct
-- 0.0 = incorrect or irrelevant
-
-Respond in this exact format:
-<reasoning>one sentence explanation</reasoning>
-<score>decimal between 0.0 and 1.0</score>"""
-
-    response, _ = call_claude(prompt)
-
-    reasoning_match = re.search(r"<reasoning>(.*?)</reasoning>", response, re.DOTALL)
-    score_match = re.search(r"<score>(.*?)</score>", response, re.DOTALL)
-
-    reasoning = (
-        reasoning_match.group(1).strip()
-        if reasoning_match
-        else "Could not parse reasoning."
+async def run_test_case_async(
+    test_case: TestCase,
+    run: Run,
+    pass_threshold: float = PASS_THRESHOLD,
+    scoring_config: str | None = None,
+) -> Result:
+    actual_output, latency_ms = await asyncio.to_thread(
+        call_claude, test_case.input, run.system_prompt
     )
 
-    try:
-        score = float(score_match.group(1).strip()) if score_match else 0.0
-        score = max(0.0, min(1.0, score))  # clamp to valid range just in case
-    except ValueError:
-        score = 0.0
-
-    return score, reasoning
-
-
-def run_test_case(test_case: TestCase, run: Run) -> Result:
-    actual_output, latency_ms = call_claude(test_case.input, run.system_prompt)
-
-    if test_case.scoring_method == ScoringMethod.exact_match:
-        score, reasoning = grade_exact_match(actual_output, test_case.expected_output)
-    elif test_case.scoring_method == ScoringMethod.llm_judge:
-        score, reasoning = grade_with_llm(actual_output, test_case.expected_output)
-    else:
-        raise NotImplementedError(  # not yet implemented
-            f"Scoring method '{test_case.scoring_method}' is not yet implemented."
-        )
+    scorer = get_scorer(test_case.scoring_method, call_claude_fn=call_claude)
+    scored = await scorer.score(
+        input=test_case.input,
+        expected=test_case.expected_output,
+        actual=actual_output,
+        pass_threshold=pass_threshold,
+        scoring_config=scoring_config,
+    )
 
     return Result(
         run_id=run.id,
         test_case_id=test_case.id,
         actual_output=actual_output,
-        score=score,
-        reasoning=reasoning,
+        score=scored.score,
+        reasoning=scored.reasoning or "",
+        latency_ms=latency_ms,
+    )
+
+
+def run_test_case(test_case: TestCase, run: Run) -> Result:
+    """Synchronous wrapper used by the legacy run_eval path."""
+    actual_output, latency_ms = call_claude(test_case.input, run.system_prompt)
+
+    scorer = get_scorer(test_case.scoring_method, call_claude_fn=call_claude)
+    scored = asyncio.run(
+        scorer.score(
+            input=test_case.input,
+            expected=test_case.expected_output,
+            actual=actual_output,
+            pass_threshold=PASS_THRESHOLD,
+        )
+    )
+
+    return Result(
+        run_id=run.id,
+        test_case_id=test_case.id,
+        actual_output=actual_output,
+        score=scored.score,
+        reasoning=scored.reasoning or "",
         latency_ms=latency_ms,
     )
 
@@ -136,9 +126,7 @@ def print_summary(results: list[Result], test_cases: list[TestCase]) -> None:
     tc_map = {tc.id: tc for tc in test_cases}
 
     print("\n" + "=" * 55)
-    print(
-        f"  EVAL RESULTS — {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC"
-    )
+    print(f"  EVAL RESULTS — {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print("=" * 55)
 
     for result in results:
